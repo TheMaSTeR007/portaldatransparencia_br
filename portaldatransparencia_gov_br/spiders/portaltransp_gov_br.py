@@ -1,7 +1,8 @@
-import browserforge.headers
 from scrapy.cmdline import execute
+from unidecode import unidecode
 from datetime import datetime
 from typing import Iterable
+import browserforge.headers
 from scrapy import Request
 import pandas as pd
 import urllib.parse
@@ -14,13 +15,38 @@ import time
 import evpn
 import os
 import re
-from unidecode import unidecode
+
+
+def df_cleaner(data_frame: pd.DataFrame) -> pd.DataFrame:
+    columns = data_frame.columns
+    data_frame = data_frame.astype(str)  # Convert all data to string
+    data_frame.drop_duplicates(inplace=True)  # Remove duplicate data from DataFrame
+    # Apply the function to all columns for Cleaning
+    for column in columns:
+        data_frame[column] = data_frame[column].apply(remove_extra_spaces)  # Remove extra spaces and newline characters from each column
+        data_frame[column] = data_frame[column].apply(set_na)  # Setting "N/A" where data is "No Information" on site
+        data_frame[column] = data_frame[column].apply(unidecode)  # Remove diacritics characters
+        if 'nome' in column or 'alias' in column:
+            # Remove punctuation
+            data_frame[column] = data_frame[column].str.replace('–', '')
+            data_frame[column] = data_frame[column].str.translate(str.maketrans('', '', string.punctuation))
+
+    data_frame.replace(to_replace='nan', value=pd.NA, inplace=True)  # After cleaning, replace 'nan' strings back with actual NaN values
+    data_frame.fillna(value='N/A', inplace=True)  # Replace NaN values with "N/A"
+    return data_frame
+
+
+def set_na(text: str) -> str:
+    return text.replace('Sem informação', 'N/A')  # Setting "N/A" where data is "No Information" on site
+
+
+# Function to remove Extra Spaces from Text
+def remove_extra_spaces(text: str) -> str:
+    spaces_removed_text = re.sub(pattern=r'\s+', repl=' ', string=text).strip()  # Regular expression to replace multiple spaces and newlines with a single space
+    return spaces_removed_text
 
 
 def header_cleaner(header_text: str) -> str:
-    # pattern = r'[^\w\s]'  # Matches anything that is not a word character or whitespace
-    # header = re.sub(pattern=pattern, string=header_text, repl='')
-    # header = '_'.join(header.lower().split())
     header_text = header_text.strip()
     header = unidecode('_'.join(header_text.lower().split()))
     return header
@@ -87,18 +113,17 @@ class PortaltranspGovBrSpider(scrapy.Spider):
         super().__init__(*args, **kwargs)
         print('Connecting to VPN (BRAZIL)')
         self.api = evpn.ExpressVpnApi()  # Connecting to VPN (BRAZIL)
-        self.api.connect(country_id='163')  # brazil country code
+        # print(self.api.get_status())
+        self.api.connect(country_id='163')  # BRAZIL country code for vpn
         time.sleep(5)  # keep some time delay before starting scraping because connecting
         if self.api.is_connected:
             print('VPN Connected!')
         else:
             print('VPN Not Connected!')
 
-        # Initialize page counter
-        self.page_number = 1
-
-        self.final_data_list = list()
         self.delivery_date = datetime.now().strftime('%Y%m%d')
+        self.final_data_list = list()  # List of data to make DataFrame then Excel
+        self.page_number = 1  # Initialize page counter
 
         # Path to store the Excel file can be customized by the user
         self.excel_path = r"../Excel_Files"  # Client can customize their Excel file path here (default: govtsites > govtsites > Excel_Files)
@@ -151,7 +176,7 @@ class PortaltranspGovBrSpider(scrapy.Spider):
             'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
         }
 
-        # Headers changes at some interval, hence using HeaderGenerator to generate headers
+        # Headers might change at some interval, try using HeaderGenerator to generate headers
         # self.headers = browserforge.headers.HeaderGenerator().generate()
         self.params = {
             'paginacaoSimples': 'false',
@@ -191,25 +216,25 @@ class PortaltranspGovBrSpider(scrapy.Spider):
                     'quantidade': get_quantity(case_dict=case_dict),  # Quantity
                 }
                 # Sending Request on Details page of current case
-                yield scrapy.Request(url=data_dict['details_link'], cookies=self.cookies_details, headers=browserforge.headers.HeaderGenerator().generate(), callback=self.parse_details_page, dont_filter=True, cb_kwargs={'data_dict': data_dict})
+                yield scrapy.Request(url=data_dict['details_link'], cookies=self.cookies_details, headers=self.headers_details, callback=self.parse_details_page, dont_filter=True, cb_kwargs={'data_dict': data_dict})
             print('-' * 50)
 
-            # # Pagination Request
-            # # Increase the offset for the next page (assuming the current offset is already in params)
-            # print(f"Currently on page: {self.page_number}")  # Print the current page number
-            # print('Performing Pagination...')
-            # # Increment page counter
-            # self.page_number += 1
-            # params = kwargs['params'].copy()  # Copy the params from the current request
-            # current_offset = int(params['offset'])  # Get the current offset
-            # next_offset = current_offset + 15  # Increment the offset by 15
-            # params['offset'] = str(next_offset)  # Update the offset in params
-            #
-            # # Check if there are more results by evaluating if the cases list is non-empty
-            # next_page_url = self.url + urllib.parse.urlencode(params)  # Generate the next page URL
-            # print(f"Requesting next page with offset: {next_offset}")
-            # yield scrapy.Request(url=next_page_url, cookies=self.cookies, headers=self.headers, method='GET', meta={'impersonate': random.choice(self.browsers)},
-            #                      callback=self.parse, dont_filter=True, cb_kwargs={'params': params})
+            # Pagination Request
+            # Increase the offset for the next page (assuming the current offset is already in params)
+            print(f"Currently on page: {self.page_number}")  # Print the current page number
+            print('Performing Pagination...')
+            # Increment page counter
+            self.page_number += 1
+            params = kwargs['params'].copy()  # Copy the params from the current request
+            current_offset = int(params['offset'])  # Get the current offset
+            next_offset = current_offset + 15  # Increment the offset by 15
+            params['offset'] = str(next_offset)  # Update the offset in params
+
+            # Check if there are more results by evaluating if the cases list is non-empty
+            next_page_url = self.url + urllib.parse.urlencode(params)  # Generate the next page URL
+            print(f"Requesting next page with offset: {next_offset}")
+            yield scrapy.Request(url=next_page_url, cookies=self.cookies, headers=self.headers, method='GET', meta={'impersonate': random.choice(self.browsers)},
+                                 callback=self.parse, dont_filter=True, cb_kwargs={'params': params})
         else:
             print(f'Data and Next Page not Found! on page number {self.page_number}')
 
@@ -236,6 +261,7 @@ class PortaltranspGovBrSpider(scrapy.Spider):
             # You can store the header-value pairs in data_dict
             for _header, value in zip(headers, values):
                 header = header_cleaner(_header)
+                value = value.strip() if value.strip() != '' else 'N/A'
                 data_dict[header] = value
 
         # xpath_attention = "//div[@class='col-xs-12 col-sm-12']/p/text()"
@@ -246,7 +272,7 @@ class PortaltranspGovBrSpider(scrapy.Spider):
         data_dict[header] = attention_div[1]
 
         # Extract the detail page link and send a request to it
-        more_details_page_link_xpath = "//a[small[contains(text(),'Clique aqui para saber mais sobre essa empresa')]]/@href"
+        more_details_page_link_xpath = "//a[small[contains(text(),'Clique aqui para saber mais sobre')]]/@href"
         more_details_page_link = selector.xpath(more_details_page_link_xpath)
 
         if more_details_page_link:
@@ -258,6 +284,8 @@ class PortaltranspGovBrSpider(scrapy.Spider):
             yield scrapy.Request(url=more_details_page_link, cookies=self.cookies_details, headers=browserforge.headers.HeaderGenerator().generate(), callback=self.parse_more_details_page, dont_filter=True, cb_kwargs={'data_dict': data_dict})  # Pass the current data_dict to the next request
         else:
             print('more_details_page_link not Found, appending data_dict...')
+            data_dict['more_details_page_link'] = 'N/A'
+            print(data_dict)
             self.final_data_list.append(data_dict)
 
     def parse_more_details_page(self, response, **kwargs):
@@ -283,23 +311,24 @@ class PortaltranspGovBrSpider(scrapy.Spider):
             # Store the header-value pairs in data_dict
             for _header, value in zip(headers, values):
                 header = header_cleaner(_header)  # Optionally clean the header
+                value = value if value != '' else 'N/A'
                 data_dict[header] = value
 
         print(json.dumps(data_dict))
+        self.final_data_list.append(data_dict)
 
     def close(self, reason):
         print('closing spider...')
-        # print("Converting List of Dictionaries into DataFrame, then into Excel file...")
-        # try:
-        #     print("Creating Native sheet...")
-        #     data_df = pd.DataFrame(self.final_data_list)
-        #     # data_df = df_cleaner(data_frame=data_df)  # Apply the function to all columns for Cleaning
-        #     data_df.drop_duplicates(inplace=True)  # Remove duplicate data from DataFrame
-        #     with pd.ExcelWriter(path=self.filename, engine='xlsxwriter') as writer:
-        #         data_df.to_excel(excel_writer=writer, index=False)
-        #     print("Native Excel file Successfully created.")
-        # except Exception as e:
-        #     print('Error while Generating Native Excel file:', e)
+        print("Converting List of Dictionaries into DataFrame, then into Excel file...")
+        try:
+            print("Creating Native sheet...")
+            data_df = pd.DataFrame(self.final_data_list)
+            data_df = df_cleaner(data_frame=data_df)  # Apply the function to all columns for Cleaning
+            with pd.ExcelWriter(path=self.filename, engine='xlsxwriter', engine_kwargs={"options": {'strings_to_urls': False}}) as writer:
+                data_df.to_excel(excel_writer=writer, index=False)
+            print("Native Excel file Successfully created.")
+        except Exception as e:
+            print('Error while Generating Native Excel file:', e)
         if self.api.is_connected:  # Disconnecting VPN if it's still connected
             self.api.disconnect()
 
