@@ -21,6 +21,7 @@ def df_cleaner(data_frame: pd.DataFrame) -> pd.DataFrame:
     columns = data_frame.columns
     data_frame = data_frame.astype(str)  # Convert all data to string
     data_frame.drop_duplicates(inplace=True)  # Remove duplicate data from DataFrame
+
     # Apply the function to all columns for Cleaning
     for column in columns:
         data_frame[column] = data_frame[column].apply(remove_extra_spaces)  # Remove extra spaces and newline characters from each column
