@@ -24,27 +24,56 @@ def df_cleaner(data_frame: pd.DataFrame) -> pd.DataFrame:
 
     # Apply the function to all columns for Cleaning
     for column in columns:
-        data_frame[column] = data_frame[column].apply(remove_extra_spaces)  # Remove extra spaces and newline characters from each column
+        data_frame[column] = data_frame[column].apply(remove_link_text)  # Remove Link Click Text from text
+        data_frame[column] = data_frame[column].apply(set_date_format)  # Set the Date format
         data_frame[column] = data_frame[column].apply(set_na)  # Setting "N/A" where data is "No Information" on site
         data_frame[column] = data_frame[column].apply(unidecode)  # Remove diacritics characters
-        if 'nome' in column or 'alias' in column:
+        data_frame[column] = data_frame[column].apply(remove_extra_spaces)  # Remove extra spaces and newline characters from each column
+        if 'nome' in column:  # Name columns
             # Remove punctuation
             data_frame[column] = data_frame[column].str.replace('–', '')
-            data_frame[column] = data_frame[column].str.translate(str.maketrans('', '', string.punctuation))
+            data_frame[column] = data_frame[column].str.translate(str.maketrans('', '', string.punctuation))  # Removing Punctuation from name text
 
     data_frame.replace(to_replace='nan', value=pd.NA, inplace=True)  # After cleaning, replace 'nan' strings back with actual NaN values
     data_frame.fillna(value='N/A', inplace=True)  # Replace NaN values with "N/A"
     return data_frame
 
 
+def remove_link_text(text: str) -> str:  # Remove Link Click Text from text
+    text = text.replace('Clique aqui para saber mais sobre essa empresa', '').strip()  # Click here to learn more about this company
+    text = text.replace('Clique aqui para saber mais sobre a pessoa', '').strip()  # Click here to learn more about the person
+    return text
+
+
 def set_na(text: str) -> str:
-    return text.replace('Sem informação', 'N/A')  # Setting "N/A" where data is "No Information" on site
+    text = remove_extra_spaces(text=text)
+    if text.title() == 'Sem Informação' or text == '**':
+        text = text.replace('Sem Informação', 'N/A')  # Setting "N/A" where data is "No Information" on site
+        text = text.replace('**', 'N/A')  # Setting "N/A" where data is "**" on site
+        return text
+    return text
+
+
+def set_date_format(text: str) -> str:
+    date_pattern = r'(\d{2}/\d{2}/\d{4})'  # Regular expression to extract the date
+    match = re.search(date_pattern, text)  # Search for the pattern anywhere in the string
+    # If a match is found, try to format the date
+    if match:
+        date_str = match.group(1)  # Extract the date part from the match
+        try:
+            # Try converting the extracted date to a datetime object
+            date_object = datetime.strptime(date_str, "%d/%m/%Y")
+            return date_object.strftime("%Y/%m/%d")  # Format the date to 'YYYY/MM/DD'
+        except ValueError:
+            # If the date is invalid, return the original text
+            return text
+    else:
+        return text  # Return the original text if no date is found
 
 
 # Function to remove Extra Spaces from Text
 def remove_extra_spaces(text: str) -> str:
-    spaces_removed_text = re.sub(pattern=r'\s+', repl=' ', string=text).strip()  # Regular expression to replace multiple spaces and newlines with a single space
-    return spaces_removed_text
+    return re.sub(pattern=r'\s+', repl=' ', string=text).strip()  # Regular expression to replace multiple spaces and newlines with a single space
 
 
 def header_cleaner(header_text: str) -> str:
@@ -93,8 +122,8 @@ def get_sanction_publication_date(case_dict: dict) -> str:
     publication_date = case_dict.get('dataPublicacao', 'N/A')  # Original date string
     if publication_date != 'Sem informação':
         date_object = datetime.strptime(publication_date, "%d/%m/%Y")  # Convert the date string to a datetime object
-        publication_date = date_object.strftime("%Y-%m-%d")  # Format the date to 'YYYY-MM-DD'
-    return publication_date if publication_date not in ['', ' ', None, 'Sem informação'] else 'N/A'
+        publication_date = date_object.strftime("%Y/%m/%d")  # Format the date to 'YYYY/MM/DD'
+    return publication_date if publication_date not in ['', ' ', None, 'Sem informação', '**'] else 'N/A'
 
 
 def get_fine_amount(case_dict: dict) -> str:
@@ -114,13 +143,9 @@ class PortaltranspGovBrSpider(scrapy.Spider):
         super().__init__(*args, **kwargs)
         print('Connecting to VPN (BRAZIL)')
         self.api = evpn.ExpressVpnApi()  # Connecting to VPN (BRAZIL)
-        # print(self.api.get_status())
         self.api.connect(country_id='163')  # BRAZIL country code for vpn
         time.sleep(5)  # keep some time delay before starting scraping because connecting
-        if self.api.is_connected:
-            print('VPN Connected!')
-        else:
-            print('VPN Not Connected!')
+        print('VPN Connected!' if self.api.is_connected else 'VPN Not Connected!')
 
         self.delivery_date = datetime.now().strftime('%Y%m%d')
         self.final_data_list = list()  # List of data to make DataFrame then Excel
@@ -221,13 +246,13 @@ class PortaltranspGovBrSpider(scrapy.Spider):
             print('-' * 50)
 
             # Pagination Request
-            # Increase the offset for the next page (assuming the current offset is already in params)
             print(f"Currently on page: {self.page_number}")  # Print the current page number
             print('Performing Pagination...')
             # Increment page counter
             self.page_number += 1
             params = kwargs['params'].copy()  # Copy the params from the current request
             current_offset = int(params['offset'])  # Get the current offset
+            # Increase the offset for the next page (assuming the current offset is already in params)
             next_offset = current_offset + 15  # Increment the offset by 15
             params['offset'] = str(next_offset)  # Update the offset in params
 
@@ -243,8 +268,7 @@ class PortaltranspGovBrSpider(scrapy.Spider):
         data_dict = kwargs['data_dict']
         selector = lxml.html.fromstring(response.text)
 
-        # Sanctioned company or person
-        # Sanction Details
+        # Sanctioned company or person, Sanction Details
         xpath_section = '//div[@class="container"]/section[@class="dados-tabelados"]/div'
         div_tags = selector.xpath(xpath_section)
 
@@ -273,19 +297,19 @@ class PortaltranspGovBrSpider(scrapy.Spider):
         data_dict[header] = attention_div[1]
 
         # Extract the detail page link and send a request to it
-        more_details_page_link_xpath = "//a[small[contains(text(),'Clique aqui para saber mais sobre')]]/@href"
-        more_details_page_link = selector.xpath(more_details_page_link_xpath)
+        more_details_page_url_xpath = "//a[small[contains(text(),'Clique aqui para saber mais sobre')]]/@href"
+        more_details_page_url = selector.xpath(more_details_page_url_xpath)
 
-        if more_details_page_link:
-            more_details_page_link = 'https://portaldatransparencia.gov.br' + more_details_page_link[0]  # Convert to absolute URL
-            data_dict['more_details_page_link'] = more_details_page_link
-            print('more_details_page_link:', more_details_page_link)
+        if more_details_page_url:
+            more_details_page_url = 'https://portaldatransparencia.gov.br' + more_details_page_url[0]  # Convert to absolute URL
+            data_dict['more_details_page_url'] = more_details_page_url
+            print('more_details_page_url:', more_details_page_url)
 
             # Make a request to the detail page
-            yield scrapy.Request(url=more_details_page_link, cookies=self.cookies_details, headers=browserforge.headers.HeaderGenerator().generate(), callback=self.parse_more_details_page, dont_filter=True, cb_kwargs={'data_dict': data_dict})  # Pass the current data_dict to the next request
+            yield scrapy.Request(url=more_details_page_url, cookies=self.cookies_details, headers=browserforge.headers.HeaderGenerator().generate(), callback=self.parse_more_details_page, dont_filter=True, cb_kwargs={'data_dict': data_dict})  # Pass the current data_dict to the next request
         else:
-            print('more_details_page_link not Found, appending data_dict...')
-            data_dict['more_details_page_link'] = 'N/A'
+            print('more_details_page_url not Found, appending data_dict...')
+            data_dict['more_details_page_url'] = 'N/A'
             print(data_dict)
             self.final_data_list.append(data_dict)
 
