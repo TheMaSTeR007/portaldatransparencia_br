@@ -18,39 +18,55 @@ import re
 
 
 def df_cleaner(data_frame: pd.DataFrame) -> pd.DataFrame:
-    columns = data_frame.columns
     data_frame = data_frame.astype(str)  # Convert all data to string
     data_frame.drop_duplicates(inplace=True)  # Remove duplicate data from DataFrame
 
     # Apply the function to all columns for Cleaning
-    for column in columns:
+    for column in data_frame.columns:
         data_frame[column] = data_frame[column].apply(remove_link_text)  # Remove Link Click Text from text
         data_frame[column] = data_frame[column].apply(set_date_format)  # Set the Date format
-        data_frame[column] = data_frame[column].apply(set_na)  # Setting "N/A" where data is "No Information" on site
+        data_frame[column] = data_frame[column].apply(set_na)  # Setting "N/A" where data is "No Information" or some empty string characters on site
         data_frame[column] = data_frame[column].apply(unidecode)  # Remove diacritics characters
         data_frame[column] = data_frame[column].apply(remove_extra_spaces)  # Remove extra spaces and newline characters from each column
-        if 'nome' in column:  # Name columns
-            # Remove punctuation
-            data_frame[column] = data_frame[column].str.replace('–', '')
+        if 'nome' in column:  # "nome" => "Name" columns
+            data_frame[column] = data_frame[column].str.replace('–', '')  # Remove specific punctuation 'dash' from name string
             data_frame[column] = data_frame[column].str.translate(str.maketrans('', '', string.punctuation))  # Removing Punctuation from name text
+        data_frame[column] = data_frame[column].apply(remove_extra_spaces)  # Remove extra spaces and newline characters from each column
 
     data_frame.replace(to_replace='nan', value=pd.NA, inplace=True)  # After cleaning, replace 'nan' strings back with actual NaN values
     data_frame.fillna(value='N/A', inplace=True)  # Replace NaN values with "N/A"
     return data_frame
 
 
+# def remove_link_text(text: str) -> str:  # Remove Link Click Text from text
+#     text = text.replace('Clique aqui para saber mais sobre essa empresa', '')  # Click here to learn more about this company
+#     text = text.replace('Clique aqui para saber mais sobre a pessoa', '')  # Click here to learn more about the person
+#     return text.strip()
+
 def remove_link_text(text: str) -> str:  # Remove Link Click Text from text
-    text = text.replace('Clique aqui para saber mais sobre essa empresa', '').strip()  # Click here to learn more about this company
-    text = text.replace('Clique aqui para saber mais sobre a pessoa', '').strip()  # Click here to learn more about the person
+    # Define a regex pattern to match both link texts
+    # pattern = r'(Clique aqui para saber mais sobre essa empresa|Clique aqui para saber mais sobre a pessoa)'
+    # pattern = r'(Clique aqui para saber mais sobre [(a pessoa)(essa empresa)]*\b)'
+    pattern = r'Clique aqui para saber mais sobre (a pessoa|essa empresa)\b'
+    text = re.sub(pattern=pattern, repl='', string=text).strip()  # Use re.sub to replace the matched patterns with an empty string and strip whitespace
     return text
 
 
+# def set_na(text: str) -> str:
+#     text = remove_extra_spaces(text=text)
+#     if text.title() == 'Sem Informação' or text == '**' or text == '.':
+#         text = text.replace('Sem Informação', 'N/A')  # Setting "N/A" where data is "No Information" on site
+#         text = text.replace('**', 'N/A')  # Setting "N/A" where data is "**" on site
+#         return text
+#     return text
+
+
 def set_na(text: str) -> str:
+    # Remove extra spaces (assuming remove_extra_spaces is a custom function)
     text = remove_extra_spaces(text=text)
-    if text.title() == 'Sem Informação' or text == '**':
-        text = text.replace('Sem Informação', 'N/A')  # Setting "N/A" where data is "No Information" on site
-        text = text.replace('**', 'N/A')  # Setting "N/A" where data is "**" on site
-        return text
+    # pattern = r'^(Sem Informação|\*{1,}|\.{1,}|\(Não Informado\))$'  # Define a regex pattern to match all the conditions in a single expression
+    pattern = r'^(Sem Informação|\(Não Informado\)|[^\w\s]+)$'  # Define a regex pattern to match all the conditions in a single expression
+    text = re.sub(pattern=pattern, repl='N/A', string=text.title())  # Replace matches with "N/A" using re.sub
     return text
 
 
@@ -266,81 +282,89 @@ class PortaltranspGovBrSpider(scrapy.Spider):
 
     def parse_details_page(self, response, **kwargs):
         data_dict = kwargs['data_dict']
-        selector = lxml.html.fromstring(response.text)
+        if response.status == 200:
+            selector = lxml.html.fromstring(response.text)
 
-        # Sanctioned company or person, Sanction Details
-        xpath_section = '//div[@class="container"]/section[@class="dados-tabelados"]/div'
-        div_tags = selector.xpath(xpath_section)
+            # Sanctioned company or person, Sanction Details
+            xpath_section = '//div[@class="container"]/section[@class="dados-tabelados"]/div'
+            div_tags = selector.xpath(xpath_section)
 
-        for div_tag in div_tags:
-            # Extract all headers within the div
-            headers = div_tag.xpath('.//strong/text()')
-            # Extract the corresponding values next to the headers
-            values = []
-            for header in headers:
-                value_xpath = f'.//strong[text()="{header}"]/following-sibling::span[1]//text()'
-                value = div_tag.xpath(value_xpath)
-                value = ' '.join(value).strip() if value else 'N/A'
-                values.append(value)
+            for div_tag in div_tags:
+                # Extract all headers within the div
+                headers = div_tag.xpath('.//strong/text()')
+                # Extract the corresponding values next to the headers
+                values = []
+                for header in headers:
+                    value_xpath = f'.//strong[text()="{header}"]/following-sibling::span[1]//text()'
+                    value = div_tag.xpath(value_xpath)
+                    value = ' '.join(value).strip() if value else 'N/A'
+                    values.append(value)
 
-            # You can store the header-value pairs in data_dict
-            for _header, value in zip(headers, values):
-                header = header_cleaner(_header)
-                value = value.strip() if value.strip() != '' else 'N/A'
-                data_dict[header] = value
+                # You can store the header-value pairs in data_dict
+                for _header, value in zip(headers, values):
+                    header = header_cleaner(_header)
+                    value = value.strip() if value.strip() != '' else 'N/A'
+                    data_dict[header] = value
 
-        # xpath_attention = "//div[@class='col-xs-12 col-sm-12']/p/text()"
-        xpath_attention = "//div/p[contains(text(), 'ATENÇÃO')]/text()"
-        attention_div = selector.xpath(xpath_attention)
-        header_text = attention_div[0]
-        header = header_cleaner(header_text)
-        data_dict[header] = attention_div[1]
+            # xpath_attention = "//div[@class='col-xs-12 col-sm-12']/p/text()"
+            xpath_attention = "//div/p[contains(text(), 'ATENÇÃO')]/text()"
+            attention_div = selector.xpath(xpath_attention)
+            header_text = attention_div[0]
+            header = header_cleaner(header_text)
+            data_dict[header] = attention_div[1]
 
-        # Extract the detail page link and send a request to it
-        more_details_page_url_xpath = "//a[small[contains(text(),'Clique aqui para saber mais sobre')]]/@href"
-        more_details_page_url = selector.xpath(more_details_page_url_xpath)
+            # Extract the detail page link and send a request to it
+            more_details_page_url_xpath = "//a[small[contains(text(),'Clique aqui para saber mais sobre')]]/@href"
+            more_details_page_url = selector.xpath(more_details_page_url_xpath)
 
-        if more_details_page_url:
-            more_details_page_url = 'https://portaldatransparencia.gov.br' + more_details_page_url[0]  # Convert to absolute URL
-            data_dict['more_details_page_url'] = more_details_page_url
-            print('more_details_page_url:', more_details_page_url)
+            if more_details_page_url:
+                more_details_page_url = 'https://portaldatransparencia.gov.br' + more_details_page_url[0]  # Convert to absolute URL
+                data_dict['more_details_page_url'] = more_details_page_url
+                # print('more_details_page_url:', more_details_page_url)
 
-            # Make a request to the detail page
-            yield scrapy.Request(url=more_details_page_url, cookies=self.cookies_details, headers=browserforge.headers.HeaderGenerator().generate(), callback=self.parse_more_details_page, dont_filter=True, cb_kwargs={'data_dict': data_dict})  # Pass the current data_dict to the next request
+                # Make a request to the detail page
+                yield scrapy.Request(url=more_details_page_url, cookies=self.cookies_details, headers=browserforge.headers.HeaderGenerator().generate(), callback=self.parse_more_details_page, dont_filter=True, cb_kwargs={'data_dict': data_dict})  # Pass the current data_dict to the next request
+            else:
+                print('more_details_page_url not Found, appending data_dict...')
+                data_dict['more_details_page_url'] = 'N/A'
+                # print(data_dict)
+                self.final_data_list.append(data_dict)
         else:
-            print('more_details_page_url not Found, appending data_dict...')
-            data_dict['more_details_page_url'] = 'N/A'
-            print(data_dict)
+            print('Http error code: ', response.status, 'Appending data dictionary...')
             self.final_data_list.append(data_dict)
 
     def parse_more_details_page(self, response, **kwargs):
-        print('in more details page...')
+        # print('in more details page...')
         data_dict = kwargs['data_dict']
-        selector = lxml.html.fromstring(response.text)
+        if response.status == 200:
+            selector = lxml.html.fromstring(response.text)
 
-        # XPath to find all div sections that contain the headers and their values
-        xpath_section = "//div[@class='container']/section[@class='dados-tabelados']//div[contains(@class, 'col-xs-12')]"
-        div_tags = selector.xpath(xpath_section)
+            # XPath to find all div sections that contain the headers and their values
+            xpath_section = "//div[@class='container']/section[@class='dados-tabelados']//div[contains(@class, 'col-xs-12')]"
+            div_tags = selector.xpath(xpath_section)
 
-        for div_tag in div_tags:
-            # Extract all headers within the div
-            headers = div_tag.xpath('.//strong/text()')
-            # Extract the corresponding values next to the headers
-            values = []
-            for header in headers:
-                value_xpath = f'.//strong[text()="{header}"]/following-sibling::span[1]//text()'
-                value = div_tag.xpath(value_xpath)
-                value = ' '.join(value).strip() if value else 'N/A'
-                values.append(value)
+            for div_tag in div_tags:
+                # Extract all headers within the div
+                headers = div_tag.xpath('.//strong/text()')
+                # Extract the corresponding values next to the headers
+                values = []
+                for header in headers:
+                    value_xpath = f'.//strong[text()="{header}"]/following-sibling::span[1]//text()'
+                    value = div_tag.xpath(value_xpath)
+                    value = ' '.join(value).strip() if value else 'N/A'
+                    values.append(value)
 
-            # Store the header-value pairs in data_dict
-            for _header, value in zip(headers, values):
-                header = header_cleaner(_header)  # Optionally clean the header
-                value = value if value != '' else 'N/A'
-                data_dict[header] = value
+                # Store the header-value pairs in data_dict
+                for _header, value in zip(headers, values):
+                    header = header_cleaner(_header)  # Optionally clean the header
+                    value = value if value != '' else 'N/A'
+                    data_dict[header] = value
 
-        print(json.dumps(data_dict))
-        self.final_data_list.append(data_dict)
+            # print(json.dumps(data_dict))
+            self.final_data_list.append(data_dict)
+        else:
+            print('Http error code: ', response.status, 'Appending data dictionary...')
+            self.final_data_list.append(data_dict)
 
     def close(self, reason):
         print('closing spider...')
@@ -359,4 +383,7 @@ class PortaltranspGovBrSpider(scrapy.Spider):
 
 
 if __name__ == '__main__':
+    start = time.time()
     execute(f'scrapy crawl {PortaltranspGovBrSpider.name}'.split())
+    end = time.time()
+    print(f'Scraping done in {end - start} seconds.')

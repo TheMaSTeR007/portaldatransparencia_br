@@ -95,3 +95,5 @@ DOWNLOAD_HANDLERS = {
     "http": "scrapy_impersonate.ImpersonateDownloadHandler",
     "https": "scrapy_impersonate.ImpersonateDownloadHandler",
 }
+
+HTTPERROR_ALLOWED_CODES = [404, 500]
