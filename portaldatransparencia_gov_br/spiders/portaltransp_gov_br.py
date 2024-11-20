@@ -65,8 +65,8 @@ def set_na(text: str) -> str:
     # Remove extra spaces (assuming remove_extra_spaces is a custom function)
     text = remove_extra_spaces(text=text)
     # pattern = r'^(Sem Informação|\*{1,}|\.{1,}|\(Não Informado\))$'  # Define a regex pattern to match all the conditions in a single expression
-    pattern = r'^(Sem Informação|\(Não Informado\)|[^\w\s]+)$'  # Define a regex pattern to match all the conditions in a single expression
-    text = re.sub(pattern=pattern, repl='N/A', string=text.title())  # Replace matches with "N/A" using re.sub
+    pattern = r'^(sem Informação|Sem informação|sem informação|Sem Informação|\(Não Informado\)|[^\w\s]+)$'  # Define a regex pattern to match all the conditions in a single expression
+    text = re.sub(pattern=pattern, repl='N/A', string=text)  # Replace matches with "N/A" using re.sub
     return text
 
 
@@ -77,12 +77,10 @@ def set_date_format(text: str) -> str:
     if match:
         date_str = match.group(1)  # Extract the date part from the match
         try:
-            # Try converting the extracted date to a datetime object
-            date_object = datetime.strptime(date_str, "%d/%m/%Y")
-            return date_object.strftime("%Y/%m/%d")  # Format the date to 'YYYY/MM/DD'
+            date_object = datetime.strptime(date_str, "%d/%m/%Y")  # Try converting the extracted date to a datetime object
+            return date_object.strftime("%Y/%m/%d")  # Format the date object to 'YYYY/MM/DD' & return Date string
         except ValueError:
-            # If the date is invalid, return the original text
-            return text
+            return text  # If the date is invalid, return the original text
     else:
         return text  # Return the original text if no date is found
 
@@ -222,7 +220,8 @@ class PortaltranspGovBrSpider(scrapy.Spider):
         # self.headers = browserforge.headers.HeaderGenerator().generate()
         self.params = {
             'paginacaoSimples': 'false',
-            'tamanhoPagina': '15',
+            # 'tamanhoPagina': '15',
+            'tamanhoPagina': '100',
             'offset': '0',
             'direcaoOrdenacao': 'asc',
             'colunaOrdenacao': 'nomeSancionado',
@@ -269,7 +268,9 @@ class PortaltranspGovBrSpider(scrapy.Spider):
             params = kwargs['params'].copy()  # Copy the params from the current request
             current_offset = int(params['offset'])  # Get the current offset
             # Increase the offset for the next page (assuming the current offset is already in params)
-            next_offset = current_offset + 15  # Increment the offset by 15
+            data_per_page = 30
+            # next_offset = current_offset + data_per_page  # Increment the offset by Data Per Page
+            next_offset = current_offset + data_per_page  # Increment the offset by Data Per Page
             params['offset'] = str(next_offset)  # Update the offset in params
 
             # Check if there are more results by evaluating if the cases list is non-empty
@@ -278,7 +279,7 @@ class PortaltranspGovBrSpider(scrapy.Spider):
             yield scrapy.Request(url=next_page_url, cookies=self.cookies, headers=self.headers, method='GET', meta={'impersonate': random.choice(self.browsers)},
                                  callback=self.parse, dont_filter=True, cb_kwargs={'params': params})
         else:
-            print(f'Data and Next Page not Found! on page number {self.page_number}')
+            print(f'Data and Next Page not Found! on page number {self.page_number} ')
 
     def parse_details_page(self, response, **kwargs):
         data_dict = kwargs['data_dict']
@@ -323,14 +324,16 @@ class PortaltranspGovBrSpider(scrapy.Spider):
                 # print('more_details_page_url:', more_details_page_url)
 
                 # Make a request to the detail page
-                yield scrapy.Request(url=more_details_page_url, cookies=self.cookies_details, headers=browserforge.headers.HeaderGenerator().generate(), callback=self.parse_more_details_page, dont_filter=True, cb_kwargs={'data_dict': data_dict})  # Pass the current data_dict to the next request
+                # yield scrapy.Request(url=more_details_page_url, cookies=self.cookies_details, headers=browserforge.headers.HeaderGenerator().generate(), callback=self.parse_more_details_page, dont_filter=True, cb_kwargs={'data_dict': data_dict})  # Pass the current data_dict to the next request
+                yield scrapy.Request(url=more_details_page_url, cookies=self.cookies_details, headers=self.headers_details, callback=self.parse_more_details_page, dont_filter=True, cb_kwargs={'data_dict': data_dict})  # Pass the current data_dict to the next request
             else:
                 print('more_details_page_url not Found, appending data_dict...')
                 data_dict['more_details_page_url'] = 'N/A'
-                # print(data_dict)
+                print(data_dict)
                 self.final_data_list.append(data_dict)
         else:
-            print('Http error code: ', response.status, 'Appending data dictionary...')
+            print('Http error code: ', response.status, 'Appending data dictionary...parse_details_page')
+            print('Page no:', self.page_number)
             self.final_data_list.append(data_dict)
 
     def parse_more_details_page(self, response, **kwargs):
@@ -363,7 +366,8 @@ class PortaltranspGovBrSpider(scrapy.Spider):
             # print(json.dumps(data_dict))
             self.final_data_list.append(data_dict)
         else:
-            print('Http error code: ', response.status, 'Appending data dictionary...')
+            print('Http error code: ', response.status, 'Appending data dictionary...parse_more_details_page')
+            print('Page no:', self.page_number)
             self.final_data_list.append(data_dict)
 
     def close(self, reason):
