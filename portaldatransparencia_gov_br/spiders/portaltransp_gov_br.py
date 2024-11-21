@@ -18,6 +18,7 @@ import re
 
 
 def df_cleaner(data_frame: pd.DataFrame) -> pd.DataFrame:
+    print('Cleaning DataFrame...')
     data_frame = data_frame.astype(str)  # Convert all data to string
     data_frame.drop_duplicates(inplace=True)  # Remove duplicate data from DataFrame
 
@@ -35,6 +36,7 @@ def df_cleaner(data_frame: pd.DataFrame) -> pd.DataFrame:
 
     data_frame.replace(to_replace='nan', value=pd.NA, inplace=True)  # After cleaning, replace 'nan' strings back with actual NaN values
     data_frame.fillna(value='N/A', inplace=True)  # Replace NaN values with "N/A"
+    print('DataFrame Cleaned...!')
     return data_frame
 
 
@@ -154,6 +156,7 @@ class PortaltranspGovBrSpider(scrapy.Spider):
     name = "portaltransp_gov_br"
 
     def __init__(self, *args, **kwargs):
+        self.start = time.time()
         super().__init__(*args, **kwargs)
         print('Connecting to VPN (BRAZIL)')
         self.api = evpn.ExpressVpnApi()  # Connecting to VPN (BRAZIL)
@@ -164,6 +167,7 @@ class PortaltranspGovBrSpider(scrapy.Spider):
         self.delivery_date = datetime.now().strftime('%Y%m%d')
         self.final_data_list = list()  # List of data to make DataFrame then Excel
         self.page_number = 1  # Initialize page counter
+        self.data_per_page = 20
 
         # Path to store the Excel file can be customized by the user
         self.excel_path = r"../Excel_Files"  # Client can customize their Excel file path here (default: govtsites > govtsites > Excel_Files)
@@ -220,8 +224,8 @@ class PortaltranspGovBrSpider(scrapy.Spider):
         # self.headers = browserforge.headers.HeaderGenerator().generate()
         self.params = {
             'paginacaoSimples': 'false',
-            # 'tamanhoPagina': '15',
-            'tamanhoPagina': '100',
+            'tamanhoPagina': f'{self.data_per_page}',
+            # 'tamanhoPagina': '100',
             'offset': '0',
             'direcaoOrdenacao': 'asc',
             'colunaOrdenacao': 'nomeSancionado',
@@ -268,9 +272,8 @@ class PortaltranspGovBrSpider(scrapy.Spider):
             params = kwargs['params'].copy()  # Copy the params from the current request
             current_offset = int(params['offset'])  # Get the current offset
             # Increase the offset for the next page (assuming the current offset is already in params)
-            data_per_page = 30
             # next_offset = current_offset + data_per_page  # Increment the offset by Data Per Page
-            next_offset = current_offset + data_per_page  # Increment the offset by Data Per Page
+            next_offset = current_offset + self.data_per_page  # Increment the offset by Data Per Page
             params['offset'] = str(next_offset)  # Update the offset in params
 
             # Check if there are more results by evaluating if the cases list is non-empty
@@ -385,9 +388,9 @@ class PortaltranspGovBrSpider(scrapy.Spider):
         if self.api.is_connected:  # Disconnecting VPN if it's still connected
             self.api.disconnect()
 
+        end = time.time()
+        print(f'Scraping done in {end - self.start} seconds.')
+
 
 if __name__ == '__main__':
-    start = time.time()
     execute(f'scrapy crawl {PortaltranspGovBrSpider.name}'.split())
-    end = time.time()
-    print(f'Scraping done in {end - start} seconds.')
